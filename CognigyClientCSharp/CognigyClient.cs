@@ -123,7 +123,12 @@ namespace Cognigy
 
             this.mySocket = IO.Socket(this.options.baseUrl, options);
 
-            this.mySocket.On("connect", () => waitHandle.Set()); /*TODO: Add Action to handle connect-event*/
+            this.mySocket.On("connect", () =>
+            {
+                waitHandle.Set();
+                this.connected = true;
+            });
+
             this.mySocket.On("connecting", data => LogStatus("CONNECTION", "Connecting to the server"));
             this.mySocket.On("connect_error", data => LogError("CONNECTION ERROR", Convert.ToString(data)));
             this.mySocket.On("connect_timeout", data => LogError("CONNECTION TIMEOUT", Convert.ToString(data)));
@@ -134,7 +139,6 @@ namespace Cognigy
             this.mySocket.On("logStepError", (data) => onOutput(Convert.ToString(data)));
 
             waitHandle.WaitOne();
-            this.connected = true; /*TODO: Move to connect-event handler*/
             return this.mySocket;
         }
 
@@ -158,7 +162,7 @@ namespace Cognigy
                 resetContext
                 );
 
-            socket.Emit("init", JObject.Parse(initParam.ToJson()));
+            socket.Emit("init", JObject.FromObject(initParam));
 
             socket.On("initResponse", () => waitHandle.Set());
             socket.On("exception", data => LogStatus("EXCEPTON", "Error in brain initialization"));
@@ -190,7 +194,7 @@ namespace Cognigy
             if (this.IsConnected())
             {
                 Message<T> message = new Message<T>(text, data);
-                this.mySocket.Emit("input", JObject.Parse(message.ToJson()));
+                this.mySocket.Emit("input", JObject.FromObject(message));
             }
             else
             {
@@ -215,7 +219,7 @@ namespace Cognigy
                 {"version", version}
             };
                 //logStatus("RESET FLOW", JsonConvert.SerializeObject(resetFlowParam));
-                this.mySocket.Emit("resetFlow", JObject.Parse(JsonConvert.SerializeObject(resetFlowParam)));
+                this.mySocket.Emit("resetFlow", JObject.FromObject(resetFlowParam));
             }
             else
                 LogError("RESETFLOW ERROR", "we are not connected");
@@ -243,25 +247,50 @@ namespace Cognigy
                 LogError("RESETCONTEXT ERROR", "we are not connected");
         }
 
-        public void InjectContext<T>(T context)
+        public async Task<string> InjectContext<T>(T context)
         {
             if (this.IsConnected())
             {
-                this.mySocket.Emit("injectContext", JObject.Parse(JsonConvert.SerializeObject(context)));
-            } else
+                string newContext = null;
+                ManualResetEvent manualResetEvent = new ManualResetEvent(false);
+
+                this.mySocket.Emit("injectContext", (callback) =>
+                {
+                    newContext = Convert.ToString(callback);
+                    manualResetEvent.Set();
+                }, JObject.FromObject(context));
+
+                manualResetEvent.WaitOne();
+                return newContext;
+            }
+            else
             {
                 LogError("INJECTCONTEXT ERROR", "we are not connected");
+                return null;
             }
         }
 
-        public void InjectState(string state)
+        public async Task<string> InjectState(string state)
         {
             if (this.IsConnected())
             {
-                this.mySocket.Emit("injectState", state);
-            } else
+                string newState = null;
+                ManualResetEvent manualResetEvent = new ManualResetEvent(false);
+
+                this.mySocket.Emit("injectState", (callback) =>
+                {
+                    newState = Convert.ToString(callback);
+                    manualResetEvent.Set();
+
+                }, state);
+
+                manualResetEvent.WaitOne();
+                return newState;
+            }
+            else
             {
                 LogError("INJECTSTATE ERROR", "we are not connected");
+                return null;
             }
         }
     }
