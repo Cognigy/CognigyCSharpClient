@@ -3,6 +3,7 @@ using Newtonsoft.Json.Linq;
 using Quobject.SocketIoClientDotNet.Client;
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -67,6 +68,8 @@ namespace Cognigy
 
         private async Task<string> Fetch(string baseUrl, string user, string apikey, string channel)
         {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls;
+
             string jsonString = JsonConvert.SerializeObject(new RequestBodyContent(user, apikey, channel));
 
             HttpClient requestClient = new HttpClient
@@ -218,7 +221,6 @@ namespace Cognigy
                 {"language", language},
                 {"version", version}
             };
-                //logStatus("RESET FLOW", JsonConvert.SerializeObject(resetFlowParam));
                 this.mySocket.Emit("resetFlow", JObject.FromObject(resetFlowParam));
             }
             else
