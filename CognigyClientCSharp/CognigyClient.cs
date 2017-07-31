@@ -12,7 +12,7 @@ using System.Threading.Tasks;
 
 namespace Cognigy
 {
-    class CognigyClient
+    public class CognigyClient
     {
         private Options options;
         private Socket mySocket;
@@ -23,10 +23,9 @@ namespace Cognigy
         Action<string, string> LogError = (type, message) => Console.Error.WriteLine(string.Format("-- {0} -- \n{1} \n", type, message));
         Action<string, string> LogStatus = (status, message) => Console.WriteLine(string.Format("--{0}: {1} --\n", status, message));
 
-        Func<string, Output> onOutput = (output) => JsonConvert.DeserializeObject<Output>(output);
+        Func<string, Output> DeserializeToOutput = (output) => JsonConvert.DeserializeObject<Output>(output);
 
-        public delegate void onResponseEvent(Output output);
-        public event onResponseEvent OnResponse;
+        public event EventHandler<OutputEventArgs> OnOutput;
 
         private static AutoResetEvent waitHandle = new AutoResetEvent(false);
 
@@ -36,13 +35,11 @@ namespace Cognigy
             this.firstLoad = true;
         }
 
-        #region Cognigy Client Initialization
         public async Task Connect()
         {
             string token = await GetToken(this.options.baseUrl, this.options.user, this.options.apikey, this.options.channel, this.options.token);
             Socket socket = await EstablishSocketConnection(token);
             await InitializeCognigyClient(socket);
-            Console.WriteLine("We are connected");
         }
 
         /// <summary>
@@ -137,9 +134,9 @@ namespace Cognigy
             this.mySocket.On("connect_timeout", data => LogError("CONNECTION TIMEOUT", Convert.ToString(data)));
             this.mySocket.On("error", data => LogError("ERROR", Convert.ToString(data)));
             this.mySocket.On("exception", data => LogStatus("EXCEPTON", Convert.ToString(data)));
-            this.mySocket.On("output", (data) => OnResponse(onOutput(Convert.ToString(data))));
-            this.mySocket.On("logStep", (data) => onOutput(Convert.ToString(data)));
-            this.mySocket.On("logStepError", (data) => onOutput(Convert.ToString(data)));
+            this.mySocket.On("output", (data) => { OnOutput?.Invoke(this, new OutputEventArgs(DeserializeToOutput(Convert.ToString(data)))); });
+            //this.mySocket.On("logStep", (data) => { if (OnOutput != null) OnOutput(this, new OutputEventArgs(DeserializeToOutput(Convert.ToString(data)))); }));
+            //this.mySocket.On("logStepError", (data) => OnOutput(Convert.ToString(data)));
 
             waitHandle.WaitOne();
             return this.mySocket;
@@ -173,7 +170,6 @@ namespace Cognigy
             waitHandle.WaitOne();
             return;
         }
-        #endregion
 
         /// <summary>
         /// Disconnects the client from the Cognigy AI
@@ -205,13 +201,26 @@ namespace Cognigy
             }
         }
 
+        public void SendMessage(string text)
+        {
+            if (this.IsConnected())
+            {
+                Message<object> message = new Message<object>(text, null);
+                this.mySocket.Emit("input", JObject.FromObject(message));
+            }
+            else
+            {
+                LogError("SENDMESSAGE ERROR", "we are not connected");
+            }
+        }
+
         /// <summary>
         /// Resets the flow to another flow or to default
         /// </summary>
         /// <param name="newFlowId">Flow to reset to</param>
         /// <param name="language">Language of the flow</param>
         /// <param name="version">Version of the flow</param>
-        public void ResetFlow(string newFlowId, string language, float? version = null)
+        public void ResetFlow(string newFlowId, string language, int? version = null)
         {
             if (this.IsConnected())
             {

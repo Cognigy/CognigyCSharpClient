@@ -1,6 +1,6 @@
 ﻿namespace Cognigy
 {
-    class Options
+    public class Options
     {
         public string baseUrl;
         public string user;
@@ -9,7 +9,7 @@
         public string language;
         public string channel;
         public string token;
-        public float? version;
+        public int? version;
         public bool? reconnection;
         public int? interval;
         public bool? resetState;
