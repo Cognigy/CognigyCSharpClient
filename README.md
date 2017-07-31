@@ -3,9 +3,9 @@ Repo for the cognigy (server) client which can be used
 to connect to the cognigy brain from server applications.
 
 ## Installation
-Add the repository to your project and restore the nuGet packages.
+Add the CognigyClientCSharp project to to your project and restore the nuGet packages.
 
-## Example
+## Usage
 ```cs
 using Cognigy;
 
