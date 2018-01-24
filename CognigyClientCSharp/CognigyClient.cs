@@ -14,23 +14,25 @@ namespace Cognigy
 {
     public class CognigyClient
     {
+        public event EventHandler<OutputEventArgs> OnOutput;
+
         private Options options;
         private Socket mySocket;
         private bool firstLoad;
 
         private bool connected = false;
 
-        Action<string, string> LogError = (type, message) => Console.Error.WriteLine(string.Format("-- {0} -- \n{1} \n", type, message));
-        Action<string, string> LogStatus = (status, message) => Console.WriteLine(string.Format("--{0}: {1} --\n", status, message));
+        private Action<string, string> LogError = (type, message) => Console.Error.WriteLine(string.Format("-- {0} -- \n{1} \n", type, message));
+        private Action<string, string> LogStatus = (status, message) => Console.WriteLine(string.Format("--{0}: {1} --\n", status, message));
 
-        Func<string, Output> DeserializeToOutput = (output) => JsonConvert.DeserializeObject<Output>(output);
-
-        public event EventHandler<OutputEventArgs> OnOutput;
+        private Func<string, Output> DeserializeToOutput = (output) => JsonConvert.DeserializeObject<Output>(output);
 
         private static AutoResetEvent waitHandle = new AutoResetEvent(false);
 
         public CognigyClient(Options options)
         {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls;
+
             this.options = options;
             this.firstLoad = true;
         }
@@ -51,7 +53,14 @@ namespace Cognigy
         /// <param name="channel"></param>
         /// <param name="token"></param>
         /// <returns></returns>
-        private async Task<string> GetToken(string baseUrl, string user, string apikey, string channel, string token)
+        private async Task<string> GetToken
+        (
+            string baseUrl,
+            string user,
+            string apikey,
+            string channel,
+            string token
+        )
         {
             if (!string.IsNullOrEmpty(token))
             {
@@ -63,45 +72,16 @@ namespace Cognigy
             }
         }
 
-        private async Task<string> Fetch(string baseUrl, string user, string apikey, string channel)
+        private async Task<string> Fetch
+        (
+            string baseUrl,
+            string user,
+            string apikey,
+            string channel
+        )
         {
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls;
-
-            string jsonString = JsonConvert.SerializeObject(new RequestBodyContent(user, apikey, channel));
-
-            HttpClient requestClient = new HttpClient
-            {
-                BaseAddress = new Uri(baseUrl + "/loginDevice"),
-            };
-
-            requestClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-            HttpRequestMessage requestMessage = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUrl + "/loginDevice"))
-            {
-                Content = new StringContent(jsonString, Encoding.UTF8, "application/json")
-            };
-
-            HttpResponseMessage responseMessage = await requestClient.SendAsync(requestMessage);
-            if (responseMessage.IsSuccessStatusCode)
-            {
-                string rawResponseContent = await responseMessage.Content.ReadAsStringAsync();
-                ResponseBodyContent responseContent = JsonConvert.DeserializeObject<ResponseBodyContent>(rawResponseContent);
-
-                if (string.IsNullOrEmpty(responseContent.token))
-                {
-                    LogError("REQUEST ERROR", "No token received");
-                    return null;
-                }
-                else
-                {
-                    return responseContent.token;
-                }
-            }
-            else
-            {
-                LogError("REQUEST ERROR", "Status Code: " + responseMessage.StatusCode);
-                return null;
-            }
+            CognigyFetchRequest cognigyFetchRequest = new CognigyFetchRequest(baseUrl, user, apikey, channel);
+            return await cognigyFetchRequest.GetToken();
         }
 
         private async Task<Socket> EstablishSocketConnection(string token)
@@ -220,7 +200,12 @@ namespace Cognigy
         /// <param name="newFlowId">Flow to reset to</param>
         /// <param name="language">Language of the flow</param>
         /// <param name="version">Version of the flow</param>
-        public void ResetFlow(string newFlowId, string language, int? version = null)
+        public void ResetFlow
+        (
+            string newFlowId,
+            string language,
+            int? version = null
+        )
         {
             if (this.IsConnected())
             {

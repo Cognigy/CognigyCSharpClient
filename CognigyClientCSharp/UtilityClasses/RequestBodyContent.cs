@@ -7,11 +7,13 @@ namespace Cognigy
     class RequestBodyContent
     {
         [JsonProperty]
-        private string user;
+        public string user { get; private set; }
+
         [JsonProperty]
-        private string apikey;
+        public string apikey { get; private set; }
+
         [JsonProperty]
-        private string channel;
+        public string channel { get; private set; }
 
         public RequestBodyContent(string user, string apikey, string channel)
         {
