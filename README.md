@@ -1,6 +1,6 @@
 # CognigyCSharpClient
-Repo for the cognigy (server) client which can be used 
-to connect to the cognigy brain from server applications.
+Repo for the Cognigy (server) client which can be used 
+to connect to the Cognigy Brain from C# applications.
 
 ## Installation
 Add the CognigyClientCSharp project to to your project and restore the nuGet packages.
@@ -19,7 +19,7 @@ public partial class MainWindow : Window
         {
             baseUrl = "exampleUrl",
             user = "exampleUser",
-            flow = "exampleFlow",
+            flow = "smalltalk",
             apikey = "exampleApiKey"
         };
 
@@ -27,7 +27,7 @@ public partial class MainWindow : Window
         client.Connect().ContinueWith((t) =>
         {
             client.OnOutput += OnResponse;
-            client.SendMessage("Hi", null);
+            client.SendMessage("Hi");
         });
     }
 
