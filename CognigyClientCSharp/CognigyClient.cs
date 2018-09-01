@@ -19,6 +19,7 @@ namespace Cognigy
         private Options options;
         private Socket mySocket;
         private bool firstLoad;
+        private long lastUsed;
 
         private bool connected = false;
 
@@ -35,6 +36,8 @@ namespace Cognigy
 
             this.options = options;
             this.firstLoad = true;
+
+            this.UpdateLastUsed();
         }
 
         public async Task Connect()
@@ -172,6 +175,7 @@ namespace Cognigy
         {
             if (this.IsConnected())
             {
+                this.UpdateLastUsed();
                 Message<T> message = new Message<T>(text, data);
                 this.mySocket.Emit("input", JObject.FromObject(message));
             }
@@ -192,6 +196,11 @@ namespace Cognigy
             {
                 LogError("SENDMESSAGE ERROR", "we are not connected");
             }
+        }
+
+        private void UpdateLastUsed()
+        {
+            this.lastUsed = DateTime.Now.Ticks - new DateTime(1970, 1, 1).Ticks;
         }
     }
 }
