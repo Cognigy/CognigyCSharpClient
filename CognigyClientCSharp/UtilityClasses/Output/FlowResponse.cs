@@ -1,6 +1,6 @@
 ﻿namespace Cognigy
 {
-    public class Output
+    public struct FlowResponse
     {
         public string text;
         public object data;
