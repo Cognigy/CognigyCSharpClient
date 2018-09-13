@@ -1,12 +1,10 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Quobject.EngineIoClientDotNet.Client.Transports;
 using Quobject.SocketIoClientDotNet.Client;
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,19 +12,19 @@ namespace Cognigy
 {
     public class CognigyClient
     {
-        public event EventHandler<OutputEventArgs> OnOutput;
+        private const string EVENT_PROCESS_INPUT = "processInput";
+        private const string EVENT_OUTPUT = "output";
+        private const string EVENT_EXCEPTION = "exception";
+        private const string EVENT_FINAL_PING = "finalPing";
 
         private Options options;
-        private Socket mySocket;
-        private bool firstLoad;
+        private Socket socketClient;
         private long lastUsed;
 
         private bool connected = false;
 
-        private Action<string, string> LogError = (type, message) => Console.Error.WriteLine(string.Format("-- {0} -- \n{1} \n", type, message));
-        private Action<string, string> LogStatus = (status, message) => Console.WriteLine(string.Format("--{0}: {1} --\n", status, message));
-
-        private Func<string, Output> DeserializeToOutput = (output) => JsonConvert.DeserializeObject<Output>(output);
+        private Action<string, string> LogError = (type, message) => Console.Error.WriteLine(string.Format("[{0}] {1}", type, message));
+        private Action<string, string> LogStatus = (status, message) => Console.WriteLine(string.Format("[{0}] {1}", status, message));
 
         private static AutoResetEvent waitHandle = new AutoResetEvent(false);
 
@@ -35,123 +33,106 @@ namespace Cognigy
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls;
 
             this.options = options;
-            this.firstLoad = true;
+
+            if (this.options.keepMarkup == null)
+                this.options.keepMarkup = false;
 
             this.UpdateLastUsed();
         }
 
+        /// <summary>
+        /// Connect the CognigyClient to the Socket Endpoint on COGNIGY.AI
+        /// </summary>
+        /// <returns></returns>
         public async Task Connect()
         {
-            string token = await GetToken(this.options.baseUrl, this.options.user, this.options.apikey, this.options.channel, this.options.token);
-            Socket socket = await EstablishSocketConnection(token);
-            await InitializeCognigyClient(socket);
-        }
+            ImmutableList<string> transports = ImmutableList.Create<string>(WebSocket.NAME, Polling.NAME);
 
-        /// <summary>
-        /// Checks if the passed token is valid. In case it's null or empty a new token gets fetched
-        /// </summary>
-        /// <param name="baseUrl">URI of the server</param>
-        /// <param name="user">User who connects to the Cognigy AI</param>
-        /// <param name="apikey">Apikey needed for the verification</param>
-        /// <param name="channel"></param>
-        /// <param name="token"></param>
-        /// <returns></returns>
-        private async Task<string> GetToken
-        (
-            string baseUrl,
-            string user,
-            string apikey,
-            string channel,
-            string token
-        )
-        {
-            if (!string.IsNullOrEmpty(token))
+            IO.Options options = new IO.Options()
             {
-                return token;
-            }
-            else
-            {
-                return await Fetch(baseUrl, user, apikey, channel);
-            }
-        }
-
-        private async Task<string> Fetch
-        (
-            string baseUrl,
-            string user,
-            string apikey,
-            string channel
-        )
-        {
-            CognigyFetchRequest cognigyFetchRequest = new CognigyFetchRequest(baseUrl, user, apikey, channel);
-            return await cognigyFetchRequest.GetToken();
-        }
-
-        private async Task<Socket> EstablishSocketConnection(string token)
-        {
-            Dictionary<string, string> queryParams = new Dictionary<string, string>()
-            {
-                {"token", token},
-                {"upgrade", "false"}
-            };
-
-            var options = new IO.Options()
-            {
-                Reconnection = true,
+                ForceNew = true,
+                Reconnection = false,
                 AutoConnect = true,
-                Query = queryParams,
-                Upgrade = false
-
+                Upgrade = true,
+                Secure = true,
+                Multiplex = false,
+                Transports = transports
             };
 
-            this.mySocket = IO.Socket(this.options.baseUrl, options);
+            this.socketClient = IO.Socket(new Uri(this.options.endpointURL), options);
 
-            this.mySocket.On("connect", () =>
+            this.socketClient.On(Socket.EVENT_CONNECT, () =>
             {
                 waitHandle.Set();
                 this.connected = true;
             });
 
-            this.mySocket.On("connecting", data => LogStatus("CONNECTION", "Connecting to the server"));
-            this.mySocket.On("connect_error", data => LogError("CONNECTION ERROR", Convert.ToString(data)));
-            this.mySocket.On("connect_timeout", data => LogError("CONNECTION TIMEOUT", Convert.ToString(data)));
-            this.mySocket.On("error", data => LogError("ERROR", Convert.ToString(data)));
-            this.mySocket.On("exception", data => LogStatus("EXCEPTON", Convert.ToString(data)));
-            this.mySocket.On("output", (data) => { OnOutput?.Invoke(this, new OutputEventArgs(DeserializeToOutput(Convert.ToString(data)))); });
-            //this.mySocket.On("logStep", (data) => { if (OnOutput != null) OnOutput(this, new OutputEventArgs(DeserializeToOutput(Convert.ToString(data)))); }));
-            //this.mySocket.On("logStepError", (data) => OnOutput(Convert.ToString(data)));
+            this.socketClient.On(Socket.EVENT_CONNECT_ERROR, data => LogError("CONNECTION ERROR", "Error connecting"));
+            this.socketClient.On(Socket.EVENT_CONNECT_TIMEOUT, data => LogError("CONNECTION TIMEOUT", "Error connecting"));
 
+            this.socketClient.On(Socket.EVENT_ERROR, data =>
+            {
+                JObject jObject = JObject.Parse(Convert.ToString(data));
+                ErrorResponse errorResponse = jObject["data"]["error"].ToObject<ErrorResponse>();
+
+                if (this.options.handleError != null)
+                    this.options.handleError(errorResponse);
+
+                LogError("ERROR", errorResponse.message);
+            });
+
+            this.socketClient.On(EVENT_EXCEPTION, data =>
+            {
+                JObject jObject = JObject.Parse(Convert.ToString(data));
+                ErrorResponse errorResponse = jObject["data"]["error"].ToObject<ErrorResponse>();
+
+                if (this.options.handleError != null)
+                    this.options.handleError(errorResponse);
+
+                LogError("EXCEPTION", errorResponse.message);
+            });
+
+            // Handling outputs from AI
+            this.socketClient.On(EVENT_OUTPUT, (data) =>
+            {
+                string response = Convert.ToString(data);
+                AIOutput aiOutput = JsonConvert.DeserializeObject<AIOutput>(response);
+
+                switch (aiOutput.type)
+                {
+                    case OutputType.error:
+                        ErrorResponse errorResponse = aiOutput.data["error"].ToObject<ErrorResponse>();
+
+                        if (this.options.handleError != null)
+                            this.options.handleError(errorResponse);
+
+                        LogError("ERROR", errorResponse.message);
+                        break;
+
+                    case OutputType.output:
+                        FlowResponse flowResponse = aiOutput.data.ToObject<FlowResponse>();
+
+                        if (this.options.handleOutput != null)
+                            this.options.handleOutput(flowResponse);
+
+                        LogStatus("OUTPUT", JsonConvert.SerializeObject(flowResponse));
+                        break;
+                }
+            });
+
+            this.socketClient.On(EVENT_FINAL_PING, (data) =>
+            {
+                string response = Convert.ToString(data);
+                FinalPing finalPing = JsonConvert.DeserializeObject<FinalPing>(response);
+
+                if (this.options.handlePing != null)
+                    this.options.handlePing(finalPing);
+
+                LogStatus("FINAL_PING", response);
+            });
+
+            // Blocking the thread until we receive the connect event
             waitHandle.WaitOne();
-            return this.mySocket;
-        }
-
-        private async Task InitializeCognigyClient(Socket socket)
-        {
-            bool? resetState = false;
-            bool? resetContext = false;
-
-            if (this.options.resetState != null && this.options.resetState == true)
-                resetState = true;
-
-            if (this.options.resetContext != null && this.options.resetContext == true)
-                resetContext = true;
-
-            InitializationParameters initParam = new InitializationParameters(
-                this.options.flow,
-                this.options.language,
-                this.options.version,
-                this.options.passthroughIP,
-                resetState,
-                resetContext
-                );
-
-            socket.Emit("init", JObject.FromObject(initParam));
-
-            socket.On("initResponse", () => waitHandle.Set());
-            socket.On("exception", data => LogStatus("EXCEPTON", "Error in brain initialization"));
-
-            waitHandle.WaitOne();
-            return;
         }
 
         /// <summary>
@@ -159,45 +140,98 @@ namespace Cognigy
         /// </summary>
         public void Disconnect()
         {
-            if (this.mySocket != null)
-                this.mySocket.Disconnect();
+            if (this.socketClient != null)
+                this.socketClient.Disconnect();
         }
 
+        /// <summary>
+        /// Checks whether the client has a socket and whether it is connected to COGNIGY.AI
+        /// </summary>
+        /// <returns></returns>
         public bool IsConnected()
         {
-            if (this.mySocket != null && this.connected)
-                return true;
-            else
-                return false;
+            return this.socketClient != null && this.connected;
         }
 
+        /// <summary>
+        /// Checks whether this client is already expired. Used to express whether the
+	    /// client wasn't used for a long time.
+        /// </summary>
+        public bool IsExpired()
+        {
+            if (this.options.expiresIn == null)
+                return false;
+
+            return (DateTime.Now.Ticks - this.lastUsed) > this.options.expiresIn;
+        }
+
+        /// <summary>
+        /// Sends a message to a COGNIGY.AI socket endpoint
+        /// </summary>
+        /// <param name="text">The input text</param>
+        /// <param name="data">The input data</param>
         public void SendMessage<T>(string text, T data)
         {
             if (this.IsConnected())
             {
                 this.UpdateLastUsed();
-                Message<T> message = new Message<T>(text, data);
-                this.mySocket.Emit("input", JObject.FromObject(message));
+
+                Message<T> message = new Message<T>
+                {
+                    URLToken = this.options.URLToken,
+                    userId = this.options.userId,
+                    sessionId = this.options.sessionId,
+                    source = "device",
+                    passthroughIP = this.options.passthroughIP,
+                    reloadFlow = this.options.reloadFlow ?? false,
+                    resetFlow = this.options.resetFlow ?? false,
+                    resetState = this.options.resetState ?? false,
+                    resetContext = this.options.resetContext ?? false,
+                    text = text,
+                    data = data
+                };
+
+                this.socketClient.Emit(EVENT_PROCESS_INPUT, JObject.FromObject(message));
             }
             else
             {
-                LogError("SENDMESSAGE ERROR", "we are not connected");
+                LogError("SENDMESSAGE", "client not connected");
             }
         }
 
+        /// <summary>
+        /// Send a simple text message
+        /// </summary>
+        /// <param name="text">The message text</param>
         public void SendMessage(string text)
         {
             if (this.IsConnected())
             {
-                Message<object> message = new Message<object>(text, null);
-                this.mySocket.Emit("input", JObject.FromObject(message));
+                Message message = new Message
+                {
+                    URLToken = this.options.URLToken,
+                    userId = this.options.userId,
+                    sessionId = this.options.sessionId,
+                    source = "device",
+                    passthroughIP = this.options.passthroughIP,
+                    reloadFlow = this.options.reloadFlow ?? false,
+                    resetFlow = this.options.resetFlow ?? false,
+                    resetState = this.options.resetState ?? false,
+                    resetContext = this.options.resetContext ?? false,
+                    text = text
+                };
+
+                this.socketClient.Emit(EVENT_PROCESS_INPUT, JObject.FromObject(message));
             }
             else
             {
-                LogError("SENDMESSAGE ERROR", "we are not connected");
+                LogError("SENDMESSAGE", "client not connected");
             }
         }
 
+        /// <summary>
+        /// Updates the last-used timestamp
+        /// </summary>
         private void UpdateLastUsed()
         {
             this.lastUsed = DateTime.Now.Ticks - new DateTime(1970, 1, 1).Ticks;
