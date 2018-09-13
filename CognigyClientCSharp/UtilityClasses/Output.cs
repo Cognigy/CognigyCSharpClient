@@ -1,6 +1,6 @@
 ﻿namespace Cognigy
 {
-    public class Output
+    public struct Output
     {
         public string text;
         public object data;
